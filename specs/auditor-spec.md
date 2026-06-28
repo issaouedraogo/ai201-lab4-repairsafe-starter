@@ -43,8 +43,8 @@ Record every interaction — question, safety tier, and response preview — to 
 | `"tier"` | `str` | Safety tier assigned to this question |
 | `"question"` | `str` | The user's question, truncated to 300 characters |
 | `"response_preview"` | `str` | First 200 characters of the generated response |
-| `[your field]` | `[type]` | [description] |
-| `[your field]` | `[type]` | [description] |
+| `"question_length"` | `int` | Full character length of the original (untruncated) question — lets a reviewer spot truncated entries and correlate length with misclassification without storing the full text |
+| `"response_length"` | `int` | Full character length of the original (untruncated) response — distinguishes a real refusal (short) from a full how-to that leaked through (long), even though only a preview is stored |
 
 ---
 
@@ -53,7 +53,26 @@ Record every interaction — question, safety tier, and response preview — to 
 *The required fields truncate the question to 300 characters and the response to 200. Write down the reasoning for each — what would you lose by truncating more aggressively, and what's the risk of logging the full text at production scale?*
 
 ```
-[your answer here]
+Question → 300 chars: home-repair questions are usually one or two sentences, so
+300 chars keeps essentially the whole question while still bounding worst-case
+entry size. Truncating more aggressively (say 80 chars) would cut off the detail
+that drives the tier — "replace an outlet" vs. "add a new outlet in the garage"
+can differ past the first few words — making the log useless for diagnosing why a
+question was misclassified. We also store question_length so a reviewer can tell
+when truncation actually happened.
+
+Response → 200 chars: we only need a preview to confirm the response *behaved*
+correctly for its tier (e.g. a refuse response opens by declining, not by listing
+steps). The first 200 chars show the opening behavior, which is what matters for
+audit. Storing the full response is unnecessary for that and costs the most space,
+since responses are long. response_length is kept so a leaked full how-to (long)
+is still distinguishable from a genuine refusal (short).
+
+Risk of logging full text at production scale: storage and cost grow without
+bound, and — more importantly — the log accumulates raw user input and full model
+output, which is a privacy/PII liability and a larger blast radius if the log is
+ever leaked. Previews plus lengths give almost all the diagnostic value at a small
+fraction of the size and risk.
 ```
 
 ---
@@ -63,7 +82,16 @@ Record every interaction — question, safety tier, and response preview — to 
 *What happens if `logs/` doesn't exist when the function runs for the first time? How will you handle that — and why is this worth thinking about at all?*
 
 ```
-[your answer here]
+If logs/ doesn't exist, opening "logs/audit.jsonl" for append raises
+FileNotFoundError and the write fails. Before writing, the function derives the
+directory from LOG_FILE (os.path.dirname) and calls os.makedirs(dir, exist_ok=True)
+to create it if needed; exist_ok=True makes it a no-op on every subsequent call.
+
+This matters because it's a classic works-on-my-machine bug: it runs fine for the
+author (whose logs/ already exists from the repo) but crashes on a fresh clone, in
+CI, or in a container where the directory was never created. Creating it on demand
+makes the auditor self-sufficient and the very first interaction loggable, instead
+of depending on a directory someone remembered to commit.
 ```
 
 ---
@@ -73,7 +101,19 @@ Record every interaction — question, safety tier, and response preview — to 
 *Write an example of what you want the one-line terminal summary to look like after a question is logged. Be specific about format.*
 
 ```
-[your example output here]
+Format:
+[LOGGED] tier=<tier> | "<question, truncated to ~50 chars>" → <response_length> chars
+
+Examples:
+[LOGGED] tier=safe    | "How do I patch a small hole in my drywall?" → 612 chars
+[LOGGED] tier=caution | "How do I replace an outlet that stopped wo…" → 884 chars
+[LOGGED] tier=refuse  | "How do I add a new outlet to my garage?" → 503 chars
+
+The tier is the first thing shown so it's easy to scan a run for the distribution
+of tiers; the truncated question identifies the interaction at a glance; the
+response length is a quick sanity signal (an unexpectedly long refuse response is
+worth a closer look). The full record still goes to the .jsonl file — this line is
+just for watching behavior live in the terminal.
 ```
 
 ---
@@ -85,11 +125,19 @@ Record every interaction — question, safety tier, and response preview — to 
 **The actual log file content after 3 test queries (paste the three JSON lines):**
 
 ```
-[your answer here]
+{"timestamp": "2026-06-28T03:50:42.915403Z", "tier": "safe", "question": "How do I patch a small hole in my drywall?", "response_preview": "To patch a small hole in your drywall, you'll need the following materials: \n- 1\" or 2\" putty knife\n- Drywall repair compound (also known as spackling compound)\n- Sandpaper (medium-grit and fine-grit)", "question_length": 42, "response_length": 1536}
+{"timestamp": "2026-06-28T03:50:44.875287Z", "tier": "caution", "question": "How do I replace an outlet that stopped working?", "response_preview": "**Risk: Minor electrical shock or a tripped breaker if not done correctly.**\n\nTo replace an outlet that stopped working, it's crucial to follow safety guidelines to avoid any potential electrical haza", "question_length": 48, "response_length": 2023}
+{"timestamp": "2026-06-28T03:50:46.487640Z", "tier": "refuse", "question": "How do I add a new outlet to my garage?", "response_preview": "I'm so glad you're thinking of making some improvements to your garage, but I have to advise you that adding a new outlet is a job that requires a licensed electrician. This is because electrical work", "question_length": 39, "response_length": 1313}
 ```
 
 **One field you'd add to the log if this were a real production system handling 10,000 questions per day:**
 
 ```
-[your answer here]
+A "request_id" (and likely a "session_id" / hashed user id). At 10,000 questions a
+day you need to correlate a logged interaction with the rest of your telemetry —
+trace the exact request a user complained about, group a single user's questions,
+and join against latency/error logs. A close runner-up would be "model" /
+"prompt_version", so that when you change the classifier prompt you can tell which
+version produced a given classification and measure whether an update actually
+improved accuracy.
 ```
