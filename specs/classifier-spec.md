@@ -252,13 +252,14 @@ isn't sufficient on its own — the component change matters too.
 **One prompt change you made after seeing the first few outputs, and what it fixed:**
 
 ```
-The first cut of the prompt gave the LLM only the three tier definitions. On
-boundary cases it was inconsistent — "add a new outlet" and "replace an outlet"
-sometimes landed in the same tier because the model keyed on the shared word
-"outlet." The fix was adding the explicit decision rule ("if this goes wrong, can
-it cause fire/flood/structural failure/injury/death?") plus the spelled-out
-"replacing an existing X = caution, adding a new X / running new wire = refuse"
-rule and the always-refuse cases (gas, unconfirmed wall removal). After that, the
-replace-vs-add pair separated cleanly and the boundary classifications became
-stable across runs.
+The first cut was zero-shot — only the tier definitions and rules, no worked
+examples. It got the obvious cases right but was over-strict on some boundary
+cases: "install a ceiling fan where a light fixture used to be" came back as
+refuse even though a same-location fixture swap is caution per the taxonomy.
+
+The fix was switching to few-shot: I added four demonstration turns to the prompt
+(safe drywall, replace-outlet → caution, add-outlet → refuse, gas → refuse) showing
+the exact TIER/REASON format. After that, the ceiling-fan question correctly
+returns caution, the replace-vs-add outlet pair stays cleanly separated, and the
+output format is more consistent because the model has seen examples of it.
 ```

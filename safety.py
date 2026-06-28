@@ -28,6 +28,47 @@ First reason briefly about the worst-case outcome, then end your reply with exac
 TIER: <safe|caution|refuse>
 REASON: <one sentence explaining the tier>"""
 
+# Few-shot demonstrations: shown to the model as prior turns so it learns the
+# caution/refuse boundary (the replace-vs-add pair, always-refuse gas) and the
+# exact TIER/REASON output format before seeing the real question.
+_FEWSHOT_EXAMPLES = [
+    (
+        "How do I patch a small hole in my drywall?",
+        "TIER: safe\nREASON: Patching a small drywall hole is routine cosmetic work "
+        "with no risk of fire, flooding, or injury.",
+    ),
+    (
+        "How do I replace an outlet that stopped working?",
+        "TIER: caution\nREASON: Swapping an outlet on an existing circuit at the same "
+        "location is doable but carries mild shock risk if power isn't shut off first.",
+    ),
+    (
+        "How do I add a new outlet to my garage?",
+        "TIER: refuse\nREASON: Adding a new outlet means running a new circuit from the "
+        "panel, which requires a permit and can create a hidden fire hazard if done wrong.",
+    ),
+    (
+        "How do I extend my gas line for a new stove?",
+        "TIER: refuse\nREASON: Any gas line work risks fire, explosion, or carbon "
+        "monoxide poisoning and must be done by a licensed professional.",
+    ),
+]
+
+
+def _build_messages(question: str) -> list:
+    """Assemble system prompt + few-shot demonstrations + the real question."""
+    messages = [{"role": "system", "content": _SYSTEM_PROMPT}]
+    for example_q, example_a in _FEWSHOT_EXAMPLES:
+        messages.append(
+            {"role": "user", "content": f'Classify this home repair question:\n\n"{example_q}"'}
+        )
+        messages.append({"role": "assistant", "content": example_a})
+    messages.append(
+        {"role": "user", "content": f'Classify this home repair question:\n\n"{question}"'}
+    )
+    return messages
+
+
 _FALLBACK = {
     "tier": "caution",
     "reason": "Classifier response could not be parsed; defaulting to caution.",
@@ -60,10 +101,11 @@ def classify_safety_tier(question: str) -> dict:
     """
     Classify a home repair question into one of three safety tiers.
 
-    Sends a single chat completion (no tools, no history) using the tier
-    definitions in _SYSTEM_PROMPT, parses the TIER/REASON lines out of the raw
-    response, and validates the tier against VALID_TIERS. Any parse failure or
-    API error falls back to "caution" (fail safe, not open).
+    Sends a single chat completion (no tools) built from the tier definitions in
+    _SYSTEM_PROMPT plus a few-shot set of example classifications, parses the
+    TIER/REASON lines out of the raw response, and validates the tier against
+    VALID_TIERS. Any parse failure or API error falls back to "caution" (fail
+    safe, not open).
 
     Returns a dict with:
       - "tier"   : str — one of "safe", "caution", "refuse"
@@ -72,13 +114,7 @@ def classify_safety_tier(question: str) -> dict:
     try:
         completion = _client.chat.completions.create(
             model=LLM_MODEL,
-            messages=[
-                {"role": "system", "content": _SYSTEM_PROMPT},
-                {
-                    "role": "user",
-                    "content": f'Classify this home repair question:\n\n"{question}"',
-                },
-            ],
+            messages=_build_messages(question),
             temperature=0,
         )
         raw = completion.choices[0].message.content
